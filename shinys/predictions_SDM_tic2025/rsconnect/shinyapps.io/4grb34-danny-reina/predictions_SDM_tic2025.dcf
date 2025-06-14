@@ -1,0 +1,12 @@
+name: predictions_SDM_tic2025
+title: predictions_SDM_tic2025
+username: 4grb34-danny-reina
+account: 4grb34-danny-reina
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 14884039
+bundleId: 10400089
+url: https://4grb34-danny-reina.shinyapps.io/predictions_SDM_tic2025/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE

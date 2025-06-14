@@ -1,0 +1,12 @@
+name: cluster_especie
+title: cluster_especie
+username: 4grb34-danny-reina
+account: 4grb34-danny-reina
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 14627485
+bundleId: 10188834
+url: https://4grb34-danny-reina.shinyapps.io/cluster_especie/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE

@@ -1,0 +1,3 @@
+cd "C:\Users\danny\Downloads\SDM-full-weighted-loss-master\SDM-full-weighted-loss-master"
+venv\Scripts\activate
+python train_model.py --region ECOPAL
