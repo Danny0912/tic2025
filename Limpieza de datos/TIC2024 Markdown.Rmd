@@ -1,0 +1,580 @@
+---
+title: "TIC 2025 - DATASET"
+author: "Danny Reina"
+date: "2025-04-21"
+output: html_document
+---
+
+## DATASET
+
+Se obtuvieron datos de tres fuentes distintas: 
+
+- Departamento de Biología de la EPN.
+- Bioweb.
+- Global Biodiversity Information Facility (GBIF).
+
+
+```{r, include=FALSE}
+library(readr)
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(tidyverse)
+library(sf)
+library(shiny)
+library(leaflet)
+library(factoextra)
+library(vegan)      
+library(tidyverse)  
+library(goeveg) 
+library(car)
+library(dbscan)
+library(geodata)
+
+library(sp)
+library(dplyr)
+library(leaflet)
+library(viridis)
+library(sf)
+
+#Lectura de datos
+
+#Datos Bioweb
+data_dendro <- read_delim("DATA/Datos_6-2DatawebEcuador.txt", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE)
+
+data_dendro <- data_dendro %>%
+  select(numeroMuseo, reino, filum, clase, orden, familia, genero, especie, latitude, longitude, fechaInicioColeccion) %>%
+  mutate(especie = tolower(especie)) %>% 
+  filter(!is.na(fechaInicioColeccion) &
+         !is.na(latitude) &
+         !is.na(longitude) &
+         !is.na(numeroMuseo) &
+         !is.na(genero) &
+         !is.na(especie))
+
+#Datos GBIF
+data_gbif <- read_delim("DATA/0009537-250402121839773.csv", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE)
+
+#Limpieza data GBIF
+data_gbif <- data_gbif %>%
+  filter(countryCode %in% c('EC', 'CO', 'PE', 'PA')) %>% 
+  select(catalogNumber, kingdom, phylum, class, order, family, genus, species, decimalLatitude, decimalLongitude, eventDate, month, year, individualCount) %>%
+  filter(!is.na(month) & !is.na(year) & !is.na(species) & !is.na(decimalLongitude) & !is.na(decimalLatitude) & !is.na(catalogNumber))%>%
+  mutate(
+    species = tolower(str_split(species, " ", simplify = TRUE)[, 2]),
+    individualCount = replace_na(individualCount, 1)
+  )%>%
+  distinct(catalogNumber, .keep_all = TRUE)
+
+data_gbif$eventDate <- as.character(data_gbif$eventDate)
+data_gbif$eventDate <- substr(data_gbif$eventDate, 1, 10)
+data_gbif$eventDate <- as.Date(data_gbif$eventDate)
+
+
+
+#Datos EPN
+data_mepn <- read_excel("DATA/DataMEPN.xlsx")
+data_mepn <- data_mepn %>% 
+  select(numero_col, ESPECIE, `COORD DECIMALES  LATITUD`, `COORD DECIMALES  LONGITUD`, mes, AÑO)%>%
+  mutate(ESPECIE = tolower(ESPECIE)) %>% 
+  filter(if_all(everything(), ~ !is.na(.)))
+
+
+#Estandarizamos nombres
+
+# BIOWEB
+data_dendro <- data_dendro %>%
+  transmute(
+    id = numeroMuseo,
+    reino,
+    filo = filum,
+    clase,
+    orden,
+    familia,
+    genero,
+    especie,
+    latitud = latitude,
+    longitud = longitude,
+    fecha = fechaInicioColeccion,
+    mes = month(fechaInicioColeccion),
+    anio = year(fechaInicioColeccion),
+    n_individuos = 1,
+    fuente = "BIOWEB"
+  )
+
+# GBIF
+data_gbif <- data_gbif %>%
+  transmute(
+    id = catalogNumber,
+    reino = kingdom,
+    filo = phylum,
+    clase = class,
+    orden = order,
+    familia = family,
+    genero = genus,
+    especie = species,
+    latitud = decimalLatitude,
+    longitud = decimalLongitude,
+    fecha = eventDate,
+    mes = month,
+    anio = year,
+    n_individuos = individualCount,
+    fuente = "GBIF"
+  )
+
+# MEPN
+data_mepn <- data_mepn %>%
+  transmute(
+    id = numero_col,
+    reino = 'Animalia',
+    filo = 'Chordata',
+    clase = 'Amphibia',
+    orden = 'Anura',
+    familia = 'Dendrobatidae',
+    genero = NA,
+    especie = ESPECIE,
+    latitud = `COORD DECIMALES  LATITUD`,
+    longitud = `COORD DECIMALES  LONGITUD`,
+    fecha = make_date(year = AÑO, month = mes, day = 1),
+    mes = mes,
+    anio = AÑO,
+    n_individuos = 1,
+    fuente = "MEPN"
+  )
+
+
+```
+
+Hacemos una limpieza de datos.
+
+```{r limpieza_data}
+#Juntamos la data de las 3 fuentes tomando en cuenta numerocatalogo como id.unico
+data_combinada <- bind_rows(data_mepn, data_dendro, data_gbif)
+data_combinada <- data_combinada %>%
+  distinct(id, .keep_all = TRUE)
+
+#Agrupamos las ocurrencias en una columna
+data_combinada <- data_combinada %>%
+  group_by(especie, latitud, longitud, fecha) %>%
+  mutate(total_individuos = sum(n_individuos, na.rm = TRUE)) %>%
+  ungroup()
+
+#Generamos la base de ocurrencias e incidencias en una sola
+data_combinada <- data_combinada %>%
+  distinct(especie, latitud, longitud, fecha, .keep_all = TRUE)
+
+#Quitamos columnas ya no necesarias (ya que las agrupamos)
+data_combinada <- data_combinada %>%
+  select(-id, -n_individuos, -fuente)
+
+
+```
+
+Lo que se realizó es tomar en cuenta los números de catálogos de cada especie de todas las fuentes (los registros sin número de catálogo no se tomaron en cuenta para evitar duplicaciones en la data), ya que ese es el id asociado a los registros de ocurrencias, en base a esto se quitaron los duplicados y el resultante fue una base con 12434 ocurrencias con un total de 30795 datos de abundancia.
+
+Miremos la distribución temporal tanto para ocurrencia como para abundancia de las especies.
+
+```{r}
+# Abundancia
+
+data_combinada %>%
+  group_by(anio) %>%
+  summarise(n = sum(total_individuos, na.rm = TRUE)) %>%
+  ggplot(aes(x = anio, y = n)) +
+  geom_line(group = 1, color = "blue", size = 1.2) +
+  geom_point(size = 3, color = "red") +
+  theme_minimal() +
+  labs(title = "Abundancia de Registros por Año",
+       x = "Año",
+       y = "Cantidad de registros")
+
+# Ocurrencias
+data_combinada %>%
+  count(anio) %>%
+  ggplot(aes(x = anio, y = n)) +
+  geom_line(group = 1, color = "blue", size = 1.2) +
+  geom_point(size = 3, color = "red") +
+  theme_minimal() +
+  labs(title = "Ocurrencia de Registros por Año",
+       x = "Año",
+       y = "Cantidad de registros")
+
+```
+
+
+Ahora miremos un histograma de ocurrencia y abundancia por especie. 
+
+```{r}
+#Conteo de especies 
+
+df_especies <- data_combinada %>%
+  count(especie, sort = TRUE) %>%
+  rename(ocurrencia = n) %>%  # Renombramos el conteo a 'ocurrencia'
+  left_join(
+    data_combinada %>%
+      group_by(especie) %>%
+      summarise(abundancia = sum(total_individuos, na.rm = TRUE)) %>%
+      arrange(desc(abundancia)),
+    by = "especie"
+  )
+
+
+# Visualización Ocurrencias (solo las primeras 30 especies)
+ggplot(head(df_especies, 30), aes(x = reorder(especie, ocurrencia), y = ocurrencia)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Cantidad de ocurrencias por especie (Top 20)",
+       x = "Especie",
+       y = "Número de ocurrencias") +
+  theme_minimal()
+
+# Visualización Abundancia (solo las primeras 30 especies)
+ggplot(head(df_especies, 30), aes(x = reorder(especie, abundancia), y = abundancia)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Abundancia por especie (Top 20)",
+       x = "Especie",
+       y = "Abundancia") +
+  theme_minimal()
+
+```
+
+Ahora haremos un análisis de pareto para identificar las especies con mayor impacto en términos de abundancia. 
+
+```{r}
+df_especies_pareto <- df_especies %>%
+  arrange(desc(abundancia)) %>%  # Ordenar
+  mutate(
+    acumulada = cumsum(abundancia),
+    porcentaje_acumulado = acumulada / sum(abundancia) * 100  
+  )
+
+# Filtro
+df_especies_pareto_top <- df_especies_pareto %>%
+  filter(porcentaje_acumulado <= 80)
+
+# Visualización de Pareto
+ggplot(head(df_especies_pareto,40), aes(x = reorder(especie, abundancia), y = abundancia)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  geom_line(aes(x = reorder(especie, abundancia), y = acumulada), color = "red", size = 1.2) +
+  geom_point(aes(x = reorder(especie, abundancia), y = acumulada), color = "red", size = 3) +
+  labs(title = "Análisis de Pareto: Abundancia por Especie",
+       x = "Especie",
+       y = "Abundancia") +
+  theme_minimal() +
+  scale_y_continuous(sec.axis = sec_axis(~ . / max(df_especies_pareto$acumulada) * 100, name = "Porcentaje Acumulado"))
+
+```
+
+Una vez seleccionadas las especies, procedamos a graficarlas en el mapa. Empezamos viendo un gráfico de ocurrencias.
+
+```{r}
+# Filter 
+data_combinada_final <- data_combinada %>%
+  filter(especie %in% df_especies_pareto_top$especie)
+
+# Crear un mapa con Leaflet
+leaflet(data_combinada_final) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    ~longitud, ~latitud,
+    color = ~colorFactor("viridis", data_combinada_final$especie)(especie),
+    radius = 2, opacity = 0.8,
+    popup = ~paste("Especie:", especie, "<br>",
+                   "Total Individuos:", total_individuos,  "<br>",
+                   "Año:", anio)
+  ) %>%
+  addLegend("bottomright", pal = colorFactor("viridis", data_combinada_final$especie), 
+            values = ~especie, title = "Especie")
+```
+
+Ahora miremos según la abundancia.
+
+```{r}
+leaflet(data_combinada_final) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    ~longitud, ~latitud,
+    color = ~colorFactor("viridis", data_combinada_final$especie)(especie),
+    radius = ~sqrt(total_individuos) * 2,  # Ajusta el tamaño basado en la abundancia
+    opacity = 0.8, fillOpacity = 0.6,
+    popup = ~paste("Especie:", especie, "<br>",
+                   "Individuos:", total_individuos, "<br>")
+  ) %>%
+  addLegend("bottomright", pal = colorFactor("viridis", data_combinada_final$especie), 
+            values = ~especie, title = "Especie")
+```
+
+Antes de proceder a modelar la distribución de las especies, haremos una clusterización espacial para identificar especies con ubicaciones similares. De esta manera, asumimos que las especies dentro de un mismo cluster tienen una distribución espacial similar, por lo que el modelo será ejecutado para todo este conjunto de especies (incidencias y abundancia). 
+
+### DBSCAN
+
+```{r}
+# Seleccionar coordenadas
+coords <- data_combinada_final %>% select(longitud, latitud)
+
+# Definir mínimo número de puntos para formar un cluster
+minPts <- 20  
+
+# Calcular la distancia
+kNN_dist <- kNNdist(coords, k = minPts - 1)
+
+# Graficar la curva de k-distancia para encontrar el mejor eps
+kNN_df <- data.frame(dist = sort(kNN_dist, decreasing = TRUE), index = 1:length(kNN_dist))
+
+ggplot(kNN_df, aes(x = index, y = dist)) +
+  geom_point() +
+  geom_line() +
+  geom_vline(xintercept = which.max(diff(kNN_df$dist)), linetype = "dashed", color = "red") +
+  labs(title = "Gráfico de k-dist para encontrar el mejor eps",
+       x = "Índice de puntos ordenados",
+       y = "Distancia al vecino más cercano") +
+  theme_minimal()
+
+# Definir el mejor valor de eps basado en la gráfica
+best_eps <- 0.5  # Ajusta este valor según el gráfico
+
+# Aplicar DBSCAN con el mejor eps
+dbscan_result <- dbscan(coords, eps = best_eps, minPts = minPts)
+
+# Agregar clusters al dataframe
+data_combinada_final$cluster_dbscan <- as.factor(dbscan_result$cluster)
+
+# Visualizar en Leaflet
+leaflet(data_combinada_final) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    ~longitud, ~latitud,
+    color = ~colorFactor("viridis", data_combinada_final$cluster_dbscan)(cluster_dbscan),
+    radius =  2,
+    opacity = 0.8, fillOpacity = 0.6,
+    popup = ~paste("Especie:", especie, "<br>",
+                   "Cluster:", cluster_dbscan, "<br>",
+                   "Individuos:", total_individuos)
+  ) %>%
+  addLegend("bottomright", pal = colorFactor("viridis", data_combinada_final$cluster_dbscan), 
+            values = ~cluster_dbscan, title = "Cluster DBSCAN")
+```
+
+Ahora generaremos una clusterización Kmeans
+
+```{r}
+# Escalar coordenadas
+coords <- scale(data_combinada_final[, c("latitud", "longitud")])
+
+# Definir número de clusters
+k <- 12 
+
+# K-Means clustering
+set.seed(123)
+kmeans_result <- kmeans(coords, centers = k, nstart = 25)
+
+# Agregar clusters al dataframe
+data_combinada_final$clusterkmean <- as.factor(kmeans_result$cluster)
+
+# Visualización en Leaflet
+leaflet(data_combinada_final) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    ~longitud, ~latitud,
+    color = ~colorFactor("viridis", data_combinada_final$clusterkmean)(clusterkmean),
+    radius = 2,
+    opacity = 0.8, fillOpacity = 0.6,
+    popup = ~paste("Especie:", especie, "<br>",
+                   "Cluster:", clusterkmean, "<br>",
+                   "Individuos:", total_individuos)
+  ) %>%
+  addLegend("bottomright", pal = colorFactor("viridis", data_combinada_final$clusterkmean), 
+            values = ~clusterkmean, title = "Cluster K-Means")
+
+```
+
+```{r}
+library(raster)
+# Datos de elevación
+elev <- geodata::elevation_global(countries=c("ECU", "COL", "PER", "PAN"), res = 10, path = ".")
+# Descargar datos bioclimáticos de WorldClim (resolución de 10 minutos de grado)
+clima <- geodata::worldclim_global(var = "bio", res = 10, path = ".")
+
+
+# Asegúrate de que las coordenadas estén correctamente definidas
+coords <- data_combinada_final[, c("latitud", "longitud")]
+
+# Extraer las variables climáticas específicas (por ejemplo, bio1 y bio12)
+bio1 <- terra::extract(clima[["wc2.1_10m_bio_1"]], coords)  # Temperatura anual media
+bio12 <- terra::extract(clima[["wc2.1_10m_bio_12"]], coords) # Precipitación anual
+
+# Extraer la elevación para las coordenadas
+elev_data <- raster::extract(elev, coords)
+
+# Crear un nuevo data.frame combinando todo
+data_clima <- data.frame(
+  latitud = data_combinada_final$latitud,
+  longitud = data_combinada_final$longitud,
+  bio1 = bio1[, 2], # El resultado de terra::extract es un data.frame
+  bio12 = bio12[, 2],
+  elevacion = elev_data[, 2]
+)
+
+# Ahora puedes seleccionar las columnas deseadas
+variables_cluster <- data_clima %>%
+  dplyr::select(latitud, longitud, bio1, bio12, elevacion)
+
+
+# Imputar valores NA con la media de cada columna
+for (col in names(variables_cluster)) {
+  if (any(is.na(variables_cluster[[col]]))) {
+    mean_val <- mean(variables_cluster[[col]], na.rm = TRUE)
+    variables_cluster[[col]][is.na(variables_cluster[[col]])] <- mean_val
+    cat(paste("Valores NA en la columna", col, "imputados con la media:", mean_val, "\n"))
+  } else {
+    cat(paste("No se encontraron valores NA en la columna", col, "\n"))
+  }
+}
+
+# Ahora podemos escalar las variables
+scaled_vars <- scale(variables_cluster)
+
+# Y realizar el clustering K-Means
+set.seed(123)
+k <- 8 # Número de clusters
+kmeans_result_amb <- kmeans(scaled_vars, centers = k, nstart = 25)
+
+# Agregar los resultados de los clusters al dataframe original
+data_combinada_final$clusterkmean_amb <- as.factor(kmeans_result_amb$cluster)
+
+
+# Visualización en Leaflet (mapa interactivo)
+leaflet(data_combinada_final) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    ~longitud, ~latitud,
+    color = ~colorFactor("viridis", data_combinada_final$clusterkmean_amb)(clusterkmean_amb),
+    radius = 2,
+    opacity = 0.8, fillOpacity = 0.6,
+    popup = ~paste("Especie:", especie, "<br>",
+                   "Cluster:", clusterkmean_amb, "<br>",
+                   "Individuos:", total_individuos)
+  ) %>%
+  addLegend("bottomright", 
+            pal = colorFactor("viridis", data_combinada_final$clusterkmean_amb), 
+            values = ~clusterkmean_amb, title = "Cluster K-Means Espacial")
+
+
+```
+```{r}
+# **Método del Codo para encontrar el número óptimo de clusters**
+wss <- numeric(20)  # Vector para almacenar la suma de cuadrados dentro del cluster
+for (i in 2:20) {
+  kmeans_result <- kmeans(scaled_vars, centers = i, nstart = 25)
+  wss[i] <- kmeans_result$tot.withinss
+}
+
+# Graficar el método del codo
+plot(2:20, wss[2:20], type = "b", 
+     xlab = "Número de Clusters", ylab = "Suma de Cuadrados Dentro del Cluster")
+abline(v = 12, col = "red", lty = 2) # Línea vertical en k=12 (tu valor actual)
+
+```
+
+```{r}
+library(raster)
+# Datos de elevación
+elev <- geodata::elevation_global(countries=c("ECU", "COL", "PER", "PAN"), res = 10, path = ".")
+# Descargar datos bioclimáticos de WorldClim (resolución de 10 minutos de grado)
+clima <- geodata::worldclim_global(var = "bio", res = 10, path = ".")
+
+
+# Asegúrate de que las coordenadas estén correctamente definidas
+coords <- data_combinada_final[, c("latitud", "longitud")]
+
+# Extraer las variables climáticas específicas (por ejemplo, bio1 y bio12)
+bio1 <- terra::extract(clima[["wc2.1_10m_bio_1"]], coords)  # Temperatura anual media
+bio12 <- terra::extract(clima[["wc2.1_10m_bio_12"]], coords) # Precipitación anual
+
+# Extraer la elevación para las coordenadas
+elev_data <- raster::extract(elev, coords)
+
+# Crear un nuevo data.frame combinando todo
+data_clima <- data.frame(
+  latitud = data_combinada_final$latitud,
+  longitud = data_combinada_final$longitud,
+  bio1 = bio1[, 2], # El resultado de terra::extract es un data.frame
+  bio12 = bio12[, 2],
+  elevacion = elev_data[, 2]
+)
+
+# Ahora puedes seleccionar las columnas deseadas
+variables_cluster <- data_clima %>%
+  dplyr::select(bio1, bio12, elevacion)
+
+
+# Imputar valores NA con la media de cada columna
+for (col in names(variables_cluster)) {
+  if (any(is.na(variables_cluster[[col]]))) {
+    mean_val <- mean(variables_cluster[[col]], na.rm = TRUE)
+    variables_cluster[[col]][is.na(variables_cluster[[col]])] <- mean_val
+    cat(paste("Valores NA en la columna", col, "imputados con la media:", mean_val, "\n"))
+  } else {
+    cat(paste("No se encontraron valores NA en la columna", col, "\n"))
+  }
+}
+
+# Ahora podemos escalar las variables
+scaled_vars <- scale(variables_cluster)
+
+# Y realizar el clustering K-Means
+set.seed(123)
+k <- 8  # Número de clusters
+kmeans_result_amb <- kmeans(scaled_vars, centers = k, nstart = 25)
+
+# Agregar los resultados de los clusters al dataframe original
+data_combinada_final$clusterkmean_amb <- as.factor(kmeans_result_amb$cluster)
+
+
+# Visualización en Leaflet (mapa interactivo)
+leaflet(data_combinada_final) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    ~longitud, ~latitud,
+    color = ~colorFactor("viridis", data_combinada_final$clusterkmean_amb)(clusterkmean_amb),
+    radius = 2,
+    opacity = 0.8, fillOpacity = 0.6,
+    popup = ~paste("Especie:", especie, "<br>",
+                   "Cluster:", clusterkmean_amb, "<br>",
+                   "Individuos:", total_individuos)
+  ) %>%
+  addLegend("bottomright", 
+            pal = colorFactor("viridis", data_combinada_final$clusterkmean_amb), 
+            values = ~clusterkmean_amb, title = "Cluster K-Means Espacial")
+
+
+```
+
+
+```{r}
+# **Método del Codo para encontrar el número óptimo de clusters**
+wss <- numeric(20)  # Vector para almacenar la suma de cuadrados dentro del cluster
+for (i in 2:20) {
+  kmeans_result_amb <- kmeans(scaled_vars, centers = i, nstart = 25)
+  wss[i] <- kmeans_result_amb$tot.withinss
+}
+
+# Graficar el método del codo
+plot(2:20, wss[2:20], type = "b", 
+     xlab = "Número de Clusters", ylab = "Suma de Cuadrados Dentro del Cluster")
+abline(v = 12, col = "red", lty = 2) # Línea vertical en k=12 (tu valor actual)
+```
+```{r}
+# Exportar el dataframe a un archivo CSV
+write.csv(data_combinada_final, file = "data_combinada_final.csv", row.names = FALSE)
+```
+
+
+

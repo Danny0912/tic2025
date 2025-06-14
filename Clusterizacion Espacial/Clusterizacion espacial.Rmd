@@ -1,0 +1,119 @@
+---
+title: "Clusterizacion Espacial"
+author: "Danny Reina"
+date: "2025-04-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(terra)
+library(sf)
+library(rnaturalearth)
+library(dplyr)
+library(ggplot2)
+library(cluster)
+library(factoextra)
+library(tidyterra)
+library(raster)
+library(geodata)
+library(terra)
+library(tidyverse)
+```
+
+## Clusterizacion espacial
+
+```{r}
+# Seleccionar paises
+paises <- ne_countries(scale = "medium", returnclass = "sf") %>%
+  filter(admin %in% c("Peru", "Ecuador", "Colombia", "Panama"))
+
+area <- st_union(paises)
+st_crs(area)  
+
+# Descargar desde worldclim
+ruta_descarga <- "C:/Users/danny/Downloads"
+clima <- worldclim_global(var = "bio", res = 10, path = ruta_descarga)
+crs(clima) <- "EPSG:4326"
+
+# Convertir el área a SpatVector 
+area_vect <- vect(area)
+
+clima_crop <- crop(clima, ext(area_vect))
+
+# Enmascarar el raster recortado con el área de interés
+clima_mask <- mask(clima_crop, area_vect)
+
+
+# Cuadriculas de 25km
+grid <- st_make_grid(area, cellsize = 0.25, square = TRUE) %>%
+  st_sf(crs = st_crs(area))
+
+# Agregar IDs
+grid$ID <- 1:nrow(grid)
+
+# extraer promedio por celda
+clima_df <- terra::extract(clima_mask, vect(grid), fun = "mean", na.rm = TRUE)
+clima_df$ID <- 1:nrow(clima_df)
+
+grid_clima <- left_join(grid, clima_df, by = "ID")
+
+# CLUSTERIZACION
+
+vars <- clima_df %>%
+  as_tibble() %>%
+  dplyr::select(starts_with("wc2.1_10m_bio_"))
+
+vars_clean <- vars %>% drop_na()
+
+# Estandarizar
+vars_scaled <- scale(vars_clean)
+
+# K-means clustering
+set.seed(42)
+km <- kmeans(vars_scaled, centers = 5, nstart = 25)
+
+
+# sin NA
+valid_rows <- complete.cases(vars)
+grid_clima_valid <- grid_clima[valid_rows, ]
+grid_clima_valid$cluster <- factor(km$cluster)
+
+grid_clima$cluster <- NA
+grid_clima$cluster[valid_rows] <- as.character(km$cluster)
+
+
+#Vista
+ggplot(grid_clima) +
+  geom_sf(aes(fill = cluster), color = NA) +
+  scale_fill_viridis_d(name = "Cluster ecológico") +
+  theme_minimal() +
+  labs(title = "Segmentación ecológica basada en variables climáticas",
+       subtitle = "Perú, Ecuador, Colombia y Panamá",
+       caption = "Datos: WorldClim BIO (res=10)")
+
+```
+
+```{r}
+vars_clean <- vars %>% drop_na()
+
+# Escalamiento
+vars_scaled <- scale(vars_clean)
+
+wss <- function(k) {
+  kmeans(vars_scaled, centers = k, nstart = 10)$tot.withinss
+}
+
+# Probar valores de k 
+k_values <- 1:10
+wss_values <- map_dbl(k_values, wss)
+
+# Graficar
+plot(k_values, wss_values,
+     type = "b", pch = 19, frame = FALSE,
+     xlab = "Número de clusters K",
+     ylab = "Suma total de cuadrados intra-cluster (WSS)",
+     main = "Método del Codo para K óptimo")
+
+```
+
+
