@@ -9,6 +9,10 @@ El objetivo principal es modelar la distribución geográfica de especies de la 
 
 Se basa en el marco propuesto por [Zbinden et al., 2024], que incorpora una función de pérdida multicomponente (`full_weighted_loss`) ajustada para modelos multiespecie y datos sesgados geográficamente.
 
+Los resultados de la limpieza y tratamiento de datos de presencia así como de la clusterización climática se pueden visualizar en línea aquí: https://4grb34-danny-reina.shinyapps.io/cluster_especie/
+
+Las distribuciones de predicciones para las especies se pueden consultar en un gráfico interactivo aquí: https://4grb34-danny-reina.shinyapps.io/predictions_SDM_tic2025/
+
 ---
 
 ## Estructura del proyecto
